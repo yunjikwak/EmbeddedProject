@@ -115,3 +115,5 @@ finally:
     
     # Stop PWM objects
     pwm_ch1.stop
+    pwm_ch2.stop
+    GPIO.cleanup()
