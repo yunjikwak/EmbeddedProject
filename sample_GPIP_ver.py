@@ -15,14 +15,14 @@ CH2 = 1 # Second motor channel (e.g., Right motor)
 
 # --- Pin Definitions (BCM Mode) ---
 # L298N ENA/ENB pins (for PWM speed control)
-ENA = 12 # GPIO 12 (PWM-capable pin)
-ENB = 13 # GPIO 13 (PWM-capable pin)
+ENA = 26 # GPIO 12 (PWM-capable pin)
+ENB = 19 # GPIO 13 (PWM-capable pin)
 
 # L298N IN1/IN2/IN3/IN4 pins (for motor direction control)
 IN1 = 24 # IN1 for Channel 1 (e.g., Left motor)
 IN2 = 23 # IN2 for Channel 1
-IN3 = 22 # IN3 for Channel 2 (e.g., Right motor)
-IN4 = 21 # IN4 for Channel 2
+IN3 = 5 # IN3 for Channel 2 (e.g., Right motor)
+IN4 = 6 # IN4 for Channel 2
 
 # --- GPIO Library Setup ---
 GPIO.setmode(GPIO.BCM)      # Use BCM GPIO numbering
