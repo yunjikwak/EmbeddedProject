@@ -29,33 +29,54 @@ def set_servo_angle(angle):
     servo_pwm.ChangeDutyCycle(duty_cycle)
     time.sleep(0.3) # Give servo time to move
 
+# --- Global variable to track overall flame status ---
+# This helps to avoid spamming "Fire not detected" messages.
+# True if any flame is currently detected, False otherwise.
+any_flame_detected_overall = False
+
 # --- Flame Detection Callback Functions ---
 def flame_left_detected(channel):
+    global any_flame_detected_overall
     if GPIO.input(channel) == GPIO.LOW: # Flame detected (Active LOW)
         print("Left flame detected! Moving servo to 45 degrees.")
         set_servo_angle(45)
+        any_flame_detected_overall = True
     else: # Flame gone (Active HIGH)
         print("Left flame gone. Moving servo to center (90 degrees).")
         set_servo_angle(90)
+        # Re-check if other flames are still detected, if not, set to False
+        if not (GPIO.input(FLAME_CENTER_PIN) == GPIO.LOW or GPIO.input(FLAME_RIGHT_PIN) == GPIO.LOW):
+            any_flame_detected_overall = False
+
 
 def flame_center_detected(channel):
+    global any_flame_detected_overall
     if GPIO.input(channel) == GPIO.LOW: # Flame detected (Active LOW)
         print("Center flame detected! Moving servo to 90 degrees.")
         set_servo_angle(90)
+        any_flame_detected_overall = True
     else: # Flame gone (Active HIGH)
         print("Center flame gone. Moving servo to center (90 degrees).")
         set_servo_angle(90)
+        # Re-check if other flames are still detected, if not, set to False
+        if not (GPIO.input(FLAME_LEFT_PIN) == GPIO.LOW or GPIO.input(FLAME_RIGHT_PIN) == GPIO.LOW):
+            any_flame_detected_overall = False
+
 
 def flame_right_detected(channel):
+    global any_flame_detected_overall
     if GPIO.input(channel) == GPIO.LOW: # Flame detected (Active LOW)
         print("Right flame detected! Moving servo to 135 degrees.")
         set_servo_angle(135)
+        any_flame_detected_overall = True
     else: # Flame gone (Active HIGH)
         print("Right flame gone. Moving servo to center (90 degrees).")
         set_servo_angle(90)
+        # Re-check if other flames are still detected, if not, set to False
+        if not (GPIO.input(FLAME_LEFT_PIN) == GPIO.LOW or GPIO.input(FLAME_CENTER_PIN) == GPIO.LOW):
+            any_flame_detected_overall = False
 
 # --- Event Detection Setup ---
-# Detect both rising and falling edges to catch flame detection and disappearance
 GPIO.add_event_detect(FLAME_LEFT_PIN, GPIO.BOTH, callback=flame_left_detected, bouncetime=300)
 GPIO.add_event_detect(FLAME_CENTER_PIN, GPIO.BOTH, callback=flame_center_detected, bouncetime=300)
 GPIO.add_event_detect(FLAME_RIGHT_PIN, GPIO.BOTH, callback=flame_right_detected, bouncetime=300)
@@ -65,9 +86,17 @@ try:
     print("Starting Raspberry Pi flame detection and servo control (event-based)...")
     set_servo_angle(90) # Set initial servo position to center
 
+    last_print_time = time.time() # To control the frequency of "Fire not detected" message
+    print_interval = 5 # Print "Fire not detected" every 5 seconds if no fire
+
     while True:
-        # Main loop keeps the program running; events are handled by callbacks.
-        time.sleep(1) 
+        # Check overall flame status if no flame was previously detected
+        # and it's time to print the message again.
+        if not any_flame_detected_overall and (time.time() - last_print_time > print_interval):
+            print("Fire not detected.")
+            last_print_time = time.time()
+
+        time.sleep(0.1) # Check sensors every 0.1 seconds (main loop still runs)
 
 except KeyboardInterrupt:
     print("\nProgram terminated by user...")
