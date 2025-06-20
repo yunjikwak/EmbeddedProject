@@ -9,7 +9,7 @@ in2 = 27
 
 #in1=5
 #in2=6
-en_a = 4  #<- check
+en_a = 12  #<- check
 #en_a = 13
 # Left Motor
 in3 = 5
