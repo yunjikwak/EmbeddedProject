@@ -83,15 +83,23 @@
 #define EI_CAMERA_FRAME_BYTE_SIZE           3
 
 // Servo motor definitions
-#define SERVO_PIN 12      // GPIO pin for the servo motor
+#define SERVO_PIN 12        // GPIO pin for the servo motor
 #define SERVO_DETECT_ANGLE 90 // Angle when firetruck is detected
 #define SERVO_HOME_ANGLE 0    // Home angle when no firetruck is detected
+#define FIRETRUCK_CONFIDENCE_THRESHOLD 0.5f // New confidence threshold for firetruck detection
+
+// Servo hold time definition 
+#define SERVO_HOLD_TIME_MS 4000 // 3 seconds in milliseconds
 
 /* Private variables ------------------------------------------------------- */
 static bool debug_nn = false; // Set this to true to see e.g. features generated from the raw signal
 static bool is_initialised = false;
 uint8_t *snapshot_buf; //points to the output of the capture
 Servo myServo; // Create a servo object
+
+// Variables for servo control logic
+unsigned long last_firetruck_detection_time = 0; // Stores the millis() when a firetruck was last detected
+bool servo_at_detection_angle = false; // Flag to track if the servo is currently at the detection angle
 
 static camera_config_t camera_config = {
     .pin_pwdn = PWDN_GPIO_NUM,
@@ -130,10 +138,11 @@ static camera_config_t camera_config = {
 bool ei_camera_init(void);
 void ei_camera_deinit(void);
 bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf) ;
+static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr);
 
 /**
-* @brief       Arduino setup function
-*/
+ * @brief       Arduino setup function
+ */
 void setup()
 {
     // put your setup code here, to run once:
@@ -159,10 +168,10 @@ void setup()
 }
 
 /**
-* @brief       Get data and run inferencing
-*
-* @param[in]   debug   Get debug info if true
-*/
+ * @brief       Get data and run inferencing
+ *
+ * @param[in]   debug   Get debug info if true
+ */
 void loop()
 {
     bool firetruck_detected_in_frame = false; // Flag to track if a firetruck is detected in the current frame
@@ -196,6 +205,7 @@ void loop()
     EI_IMPULSE_ERROR err = run_classifier(&signal, &result, debug_nn);
     if (err != EI_IMPULSE_OK) {
         ei_printf("ERR: Failed to run classifier (%d)\n", err);
+        free(snapshot_buf); // Free buffer before returning
         return;
     }
 
@@ -211,46 +221,51 @@ void loop()
             continue;
         }
         ei_printf("   %s (%f) [ x: %u, y: %u, width: %u, height: %u ]\r\n",
-                bb.label,
-                bb.value,
-                bb.x,
-                bb.y,
-                bb.width,
-                bb.height);
-        if (strcmp(bb.label, "firetruck") == 0 && bb.value > 0.7) { // Assuming "firetruck" is the label and a confidence threshold of 0.7
+                  bb.label,
+                  bb.value,
+                  bb.x,
+                  bb.y,
+                  bb.width,
+                  bb.height);
+        // Check for "firetruck" label with the new confidence threshold
+        if (strcmp(bb.label, "firetruck") == 0 && bb.value > FIRETRUCK_CONFIDENCE_THRESHOLD) {
             firetruck_detected_in_frame = true;
         }
     }
-
-    // Control the servo based on detection
-    if (firetruck_detected_in_frame) {
-        myServo.write(SERVO_DETECT_ANGLE);
-        ei_printf("Firetruck detected! Moving servo to %d degrees.\r\n", SERVO_DETECT_ANGLE);
-    } else {
-        myServo.write(SERVO_HOME_ANGLE);
-        ei_printf("No firetruck detected. Moving servo to %d degrees.\r\n", SERVO_HOME_ANGLE);
-    }
-
-    // Print the prediction results (classification)
 #else
     ei_printf("Predictions:\r\n");
     for (uint16_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
         ei_printf("   %s: ", ei_classifier_inferencing_categories[i]);
         ei_printf("%.5f\r\n", result.classification[i].value);
-        if (strcmp(ei_classifier_inferencing_categories[i], "firetruck") == 0 && result.classification[i].value > 0.7) {
+        // Check for "firetruck" label with the new confidence threshold
+        if (strcmp(ei_classifier_inferencing_categories[i], "firetruck") == 0 && result.classification[i].value > FIRETRUCK_CONFIDENCE_THRESHOLD) {
             firetruck_detected_in_frame = true;
         }
     }
-
-    // Control the servo based on detection
-    if (firetruck_detected_in_frame) {
-        myServo.write(SERVO_DETECT_ANGLE);
-        ei_printf("Firetruck detected! Moving servo to %d degrees.\r\n", SERVO_DETECT_ANGLE);
-    } else {
-        myServo.write(SERVO_HOME_ANGLE);
-        ei_printf("No firetruck detected. Moving servo to %d degrees.\r\n", SERVO_HOME_ANGLE);
-    }
 #endif
+
+    // Control the servo based on detection and time
+    if (firetruck_detected_in_frame) {
+        // If a firetruck is detected, set the servo to the detection angle
+        // and update the last detection time.
+        if (!servo_at_detection_angle) {
+            myServo.write(SERVO_DETECT_ANGLE);
+            ei_printf("Firetruck detected! Moving servo to %d degrees.\r\n", SERVO_DETECT_ANGLE);
+            servo_at_detection_angle = true;
+        }
+        last_firetruck_detection_time = millis(); // Reset timer on fresh detection
+    } else {
+        // If no firetruck is detected in this frame,
+        // check if the servo is at the detection angle and if enough time has passed.
+        if (servo_at_detection_angle) {
+            if (millis() - last_firetruck_detection_time >= SERVO_HOLD_TIME_MS) {
+                myServo.write(SERVO_HOME_ANGLE);
+                ei_printf("No firetruck detected for %lu ms. Moving servo to %d degrees.\r\n", SERVO_HOLD_TIME_MS, SERVO_HOME_ANGLE);
+                servo_at_detection_angle = false;
+            }
+        }
+        // If servo_at_detection_angle is already false, it means it's already at home, so no action needed.
+    }
 
     // Print anomaly result (if it exists)
 #if EI_CLASSIFIER_HAS_ANOMALY
@@ -265,18 +280,16 @@ void loop()
             continue;
         }
         ei_printf("   %s (%f) [ x: %u, y: %u, width: %u, height: %u ]\r\n",
-                bb.label,
-                bb.value,
-                bb.x,
-                bb.y,
-                bb.width,
-                bb.height);
+                  bb.label,
+                  bb.value,
+                  bb.x,
+                  bb.y,
+                  bb.width,
+                  bb.height);
     }
 #endif
 
-
-    free(snapshot_buf);
-
+    free(snapshot_buf); // Free the allocated buffer after use
 }
 
 /**
@@ -368,12 +381,12 @@ bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf
 
    bool converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, snapshot_buf);
 
-   esp_camera_fb_return(fb);
+    esp_camera_fb_return(fb);
 
-   if(!converted){
-       ei_printf("Conversion failed\n");
-       return false;
-   }
+    if(!converted){
+        ei_printf("Conversion failed\n");
+        return false;
+    }
 
     if ((img_width != EI_CAMERA_RAW_FRAME_BUFFER_COLS)
         || (img_height != EI_CAMERA_RAW_FRAME_BUFFER_ROWS)) {
@@ -404,6 +417,8 @@ static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr)
     while (pixels_left != 0) {
         // Swap BGR to RGB here
         // due to https://github.com/espressif/esp32-camera/issues/379
+        // This assumes snapshot_buf contains BGR data from the camera,
+        // and converts it to RGB for the classifier.
         out_ptr[out_ptr_ix] = (snapshot_buf[pixel_ix + 2] << 16) + (snapshot_buf[pixel_ix + 1] << 8) + snapshot_buf[pixel_ix];
 
         // go to the next pixel
